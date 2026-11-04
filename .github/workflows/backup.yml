@@ -1,0 +1,79 @@
+name: Daily database backup
+
+# Runs pg_dump every day, encrypts the dump, and uploads it to private S3-compatible
+# storage such as Cloudflare R2 or Backblaze B2. Backups older than 35 days are deleted.
+#
+# This repository is public, so backups must never be stored as workflow artifacts:
+# anyone on GitHub could download them. Only the encrypted file leaves the runner.
+#
+# Repository secrets required (the run fails loudly if any is missing):
+#   DATABASE_URL                 direct, non-pooled connection string
+#   BACKUP_PASSPHRASE            long random passphrase. Keep a copy outside GitHub.
+#   BACKUP_S3_ENDPOINT           for example https://<account>.r2.cloudflarestorage.com
+#   BACKUP_S3_BUCKET             a private bucket
+#   BACKUP_S3_ACCESS_KEY_ID      a key limited to that bucket
+#   BACKUP_S3_SECRET_ACCESS_KEY
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.BACKUP_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_S3_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+      AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+      S3_ENDPOINT: ${{ secrets.BACKUP_S3_ENDPOINT }}
+      S3_BUCKET: ${{ secrets.BACKUP_S3_BUCKET }}
+    steps:
+      - name: Check configuration
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          set -eu
+          for name in DATABASE_URL BACKUP_PASSPHRASE S3_ENDPOINT S3_BUCKET AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+            if [ -z "$(printenv "$name")" ]; then
+              echo "Missing backup setting: $name. No backup was taken."
+              exit 1
+            fi
+          done
+          aws --version
+      - name: Install PostgreSQL 17 client
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo tee /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc > /dev/null
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-17
+      - name: Dump, encrypt and upload
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          FILE="church-cms-$(date -u +%F).dump"
+          /usr/lib/postgresql/17/bin/pg_dump "$DATABASE_URL" --format=custom --no-owner --no-privileges --file="$FILE"
+          test -s "$FILE"
+          openssl enc -aes-256-cbc -pbkdf2 -salt -in "$FILE" -out "$FILE.enc" -pass env:BACKUP_PASSPHRASE
+          rm "$FILE"
+          aws s3 cp "$FILE.enc" "s3://$S3_BUCKET/$FILE.enc" --endpoint-url "$S3_ENDPOINT" --only-show-errors
+          rm "$FILE.enc"
+          echo "Backup uploaded."
+      - name: Delete backups older than 35 days
+        run: |
+          set -euo pipefail
+          CUTOFF="$(date -u -d '35 days ago' +%F)"
+          aws s3 ls "s3://$S3_BUCKET/" --endpoint-url "$S3_ENDPOINT" | awk '{print $4}' | while read -r KEY; do
+            DAY="$(echo "$KEY" | sed -n 's/^church-cms-\([0-9-]*\)\.dump\.enc$/\1/p')"
+            if [ -n "$DAY" ] && [ "$DAY" \< "$CUTOFF" ]; then
+              aws s3 rm "s3://$S3_BUCKET/$KEY" --endpoint-url "$S3_ENDPOINT" --only-show-errors
+            fi
+          done
