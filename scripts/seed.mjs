@@ -6,8 +6,8 @@ import bcrypt from "bcryptjs";
 import pg from "pg";
 
 const url = process.env.DATABASE_URL;
-const email = process.env.ADMIN_EMAIL;
-const password = process.env.ADMIN_PASSWORD;
+const email = process.env.ADMIN_EMAIL?.trim();
+const password = process.env.ADMIN_PASSWORD?.trim();
 if (!url || !email || !password) {
   console.error("DATABASE_URL, ADMIN_EMAIL and ADMIN_PASSWORD must be set.");
   process.exit(1);
