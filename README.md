@@ -79,8 +79,9 @@ throwaway Postgres and apply the real migrations, so they need no setup.
 
 1. Create a Postgres database on Supabase or Neon (version 15 or newer). Note two connection
    strings: the pooled one for the app, and the direct one for migrations and backups.
-2. From your computer, with `.env` pointing at the **direct** connection string, run
-   `npm run db:migrate` and `npm run db:seed`.
+2. `vercel.json` applies migrations and the seed on every production deploy, so nothing needs running by
+   hand. To change the admin password, change `ADMIN_PASSWORD` in Vercel and redeploy. The seed adds sample
+   programs and departments only when those tables are empty.
 3. Import this GitHub repository into Vercel. The repository is public, so keep every secret in Vercel
    and GitHub settings, and never in the code.
 4. In Vercel, set these environment variables:
@@ -88,6 +89,8 @@ throwaway Postgres and apply the real migrations, so they need no setup.
    | Variable | Value |
    |---|---|
    | `DATABASE_URL` | The pooled connection string |
+   | `ADMIN_EMAIL` | The admin's sign-in email |
+   | `ADMIN_PASSWORD` | At least 10 characters |
    | `AUTH_SECRET` | A long random string |
    | `CRON_SECRET` | A long random string |
    | `APP_URL` | Your final public address, such as `https://cms.yourchurch.org` |

@@ -19,7 +19,7 @@ if (password.length < 10) {
 
 const client = new pg.Client({
   connectionString: url,
-  ssl: /localhost|127\.0\.0\.1/.test(url) ? undefined : { rejectUnauthorized: false },
+  ssl: /localhost|127\.0\.0\.1/.test(url) ? undefined : { rejectUnauthorized: process.env.DATABASE_SSL_NO_VERIFY !== "true" },
 });
 const token = () => randomBytes(18).toString("base64url");
 pg.types.setTypeParser(1082, (v) => v);
@@ -35,24 +35,26 @@ try {
     [email, hash],
   );
 
-  const programs = [
-    ["Sunday Service", "regular", true, true],
-    ["Midweek Service", "regular", true, false],
-    ["Annual Conference", "special", true, false],
-  ];
-  for (const [name, type, counts, isSunday] of programs) {
-    await client.query(
-      `INSERT INTO programs (name, type, counts_toward_streak, is_sunday, qr_token)
-       SELECT $1, $2, $3, $4, $5 WHERE NOT EXISTS (SELECT 1 FROM programs WHERE name = $1)`,
-      [name, type, counts, isSunday, token()],
-    );
+  // This runs on every deploy, so samples only go into an empty table. A program or
+  // department the admin renamed or archived must never come back.
+  const count = async (table) => (await client.query(`SELECT count(*)::int AS n FROM ${table}`)).rows[0].n;
+  if ((await count("programs")) === 0) {
+    const programs = [
+      ["Sunday Service", "regular", true, true],
+      ["Midweek Service", "regular", true, false],
+      ["Annual Conference", "special", true, false],
+    ];
+    for (const [name, type, counts, isSunday] of programs) {
+      await client.query(
+        `INSERT INTO programs (name, type, counts_toward_streak, is_sunday, qr_token) VALUES ($1, $2, $3, $4, $5)`,
+        [name, type, counts, isSunday, token()],
+      );
+    }
   }
-  for (const name of ["Choir", "Ushering", "Media", "Children's Ministry", "Protocol"]) {
-    await client.query(
-      `INSERT INTO departments (name, qr_token)
-       SELECT $1, $2 WHERE NOT EXISTS (SELECT 1 FROM departments WHERE name = $1)`,
-      [name, token()],
-    );
+  if ((await count("departments")) === 0) {
+    for (const name of ["Choir", "Ushering", "Media", "Children's Ministry", "Protocol"]) {
+      await client.query(`INSERT INTO departments (name, qr_token) VALUES ($1, $2)`, [name, token()]);
+    }
   }
 
   if (process.argv.includes("--demo")) await seedDemo();

@@ -14,7 +14,7 @@ if (!url) {
 
 const client = new pg.Client({
   connectionString: url,
-  ssl: /localhost|127\.0\.0\.1/.test(url) ? undefined : { rejectUnauthorized: false },
+  ssl: /localhost|127\.0\.0\.1/.test(url) ? undefined : { rejectUnauthorized: process.env.DATABASE_SSL_NO_VERIFY !== "true" },
 });
 await client.connect();
 try {

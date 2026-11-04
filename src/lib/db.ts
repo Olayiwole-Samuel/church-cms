@@ -18,7 +18,7 @@ function pool(): Pool {
     globalThis.__cmsPool = new Pool({
       connectionString: url,
       max: Number(process.env.DATABASE_POOL_MAX || 5),
-      ssl: isLocal ? undefined : { rejectUnauthorized: false },
+      ssl: isLocal ? undefined : { rejectUnauthorized: process.env.DATABASE_SSL_NO_VERIFY !== "true" },
     });
     // Hosted databases close idle connections. Without a listener, that crashes the process.
     globalThis.__cmsPool.on("error", (error) => console.error("Idle database connection closed:", error.message));
