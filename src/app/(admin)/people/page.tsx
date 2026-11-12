@@ -2,6 +2,7 @@ import Link from "next/link";
 import { AutoSelect } from "@/components/AutoSelect";
 import { DataTable, PersonCell } from "@/components/DataTable";
 import { fmtDate } from "@/components/format";
+import { ImportPeople } from "@/components/ImportPeople";
 import { ActionButton, ApiForm, SheetButton } from "@/components/ui";
 import { listPeople, listTags, openDuplicates } from "@/lib/queries";
 
@@ -41,6 +42,9 @@ export default async function PeoplePage({ searchParams }: { searchParams: Promi
           <p className="page-sub">{total} found</p>
         </div>
         <div className="head-actions">
+          <SheetButton label="Import CSV" title="Import people from CSV">
+            <ImportPeople />
+          </SheetButton>
           <SheetButton label="Quick Add" title="Quick add">
             <ApiForm path="/api/people/quick-add" submitLabel="Add" fields={[{ name: "full_name", label: "Full name", required: true }]} />
           </SheetButton>
