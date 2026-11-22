@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 const baseUrl = (req: NextRequest) => (process.env.APP_URL || req.nextUrl.origin).replace(/\/$/, "");
 
-export const programCheckinUrl = (req: NextRequest, token: string) => `${baseUrl(req)}/checkin/${token}`;
+export const churchCheckinUrl = (req: NextRequest, token: string) => `${baseUrl(req)}/checkin/${token}`;
 export const departmentCheckinUrl = (req: NextRequest, token: string) => `${baseUrl(req)}/checkin/dept/${token}`;
 
 /** ?format=png|svg, and ?download=1 to save as a file. */

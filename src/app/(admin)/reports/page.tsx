@@ -19,10 +19,10 @@ export default async function ReportsPage() {
     report("department-attendance"),
   ]);
 
-  const byProgram = new Map<string, { date: string; label: string; value: number }[]>();
+  const byProgram = new Map<string, { date: string; label: string; value: number; male: number; female: number; children: number }[]>();
   for (const t of trends ?? []) {
     if (!byProgram.has(t.program_name)) byProgram.set(t.program_name, []);
-    byProgram.get(t.program_name)!.push({ date: t.date, label: short(t.date), value: t.present });
+    byProgram.get(t.program_name)!.push({ date: t.date, label: short(t.date), value: t.present, male: t.male, female: t.female, children: t.children });
   }
   const funnelPrograms = [...new Set((funnel ?? []).map((f) => f.program_name as string))];
   const empty = <p className="empty">No data yet.</p>;
@@ -60,9 +60,9 @@ export default async function ReportsPage() {
                 <summary>Show as table</summary>
                 <div className="table-wrap">
                   <table>
-                    <thead><tr><th>Date</th><th className="num">Present</th></tr></thead>
+                    <thead><tr><th>Date</th><th className="num">Male</th><th className="num">Female</th><th className="num">Children</th><th className="num">Total</th></tr></thead>
                     <tbody>
-                      {points.map((p) => <tr key={p.date}><td>{p.label}</td><td className="num">{p.value}</td></tr>)}
+                      {points.map((p) => <tr key={p.date}><td>{p.label}</td><td className="num">{p.male}</td><td className="num">{p.female}</td><td className="num">{p.children}</td><td className="num">{p.value}</td></tr>)}
                     </tbody>
                   </table>
                 </div>
@@ -74,6 +74,7 @@ export default async function ReportsPage() {
 
       <section className="card">
         <h2>Engagement funnel</h2>
+        <p className="small muted">Only people recorded by name: QR check-ins and the altar-call track. The headcount numbers are not people, so they are not here.</p>
         {funnelPrograms.length === 0 && empty}
         <div className="grid-2">
           {funnelPrograms.map((program) => (

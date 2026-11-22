@@ -8,6 +8,9 @@ import { getProgram, listSessions } from "@/lib/queries";
 
 export const metadata = { title: "Program" };
 
+const counted = (s: Record<string, unknown>) =>
+  s.present_count === null ? "Attendance not entered" : `${s.present_count} present (${s.male} male, ${s.female} female, ${s.children} children)`;
+
 export default async function ProgramPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   if (!/^[0-9a-f-]{36}$/.test(id)) notFound();
@@ -63,47 +66,33 @@ export default async function ProgramPage({ params }: { params: Promise<{ id: st
         </div>
       </div>
 
-      <div className="split">
-        <div className="side">
-          <section className="card">
-            <h2>Permanent QR code</h2>
-            <p className="small muted">Print once. This code never changes. It always checks people in to today&apos;s session of this program.</p>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img className="qr-box" src={`/api/programs/${id}/qr?format=png`} alt={`Check-in QR code for ${program.name}`} />
-            <div className="row" style={{ marginTop: "0.75rem" }}>
-              <a className="btn sm" href={`/api/programs/${id}/qr?format=png&download=1`}>Download PNG</a>
-              <a className="btn sm" href={`/api/programs/${id}/qr?format=svg&download=1`}>Download SVG</a>
-              <Link className="btn sm" href={`/checkin/${program.qr_token}`} target="_blank">Open check-in page</Link>
-            </div>
-          </section>
-        </div>
-        <div className="main-col">
           <section className="card">
             <div className="only-phone"><h2>Sessions</h2></div>
             <DataTable
               rows={sessions}
               rowKey={(s) => s.id}
-              empty="No sessions yet. People can only check in once today's session exists."
+              empty="No sessions yet. QR check-in only works once today's session exists."
               mobile={(s) => (
                 <div className="spread">
                   <Link href={`/attendance?program=${id}&session=${s.id}`}>
                     {fmtDate(s.date)}
-                    <span className="sub">{s.present_count} present, {s.altar_count} altar call{s.notes ? `. ${s.notes}` : ""}</span>
+                    <span className="sub">{counted(s)}, {s.altar_count} altar call{s.notes ? `. ${s.notes}` : ""}</span>
                   </Link>
                   {archiveButton(s.id)}
                 </div>
               )}
               columns={[
                 { label: "Session", nowrap: true, render: (s) => <Link href={`/attendance?program=${id}&session=${s.id}`}>{fmtDate(s.date)}</Link> },
-                { label: "Present", align: "right", render: (s) => s.present_count },
+                { label: "Male", align: "right", render: (s) => s.male ?? "—" },
+                { label: "Female", align: "right", render: (s) => s.female ?? "—" },
+                { label: "Children", align: "right", render: (s) => s.children ?? "—" },
+                { label: "Total", align: "right", render: (s) => (s.present_count === null ? "Not entered" : <strong>{s.present_count}</strong>) },
                 { label: "Altar call", align: "right", render: (s) => s.altar_count },
                 { label: "Notes", render: (s) => s.notes ?? "" },
                 { label: "Actions", render: (s) => archiveButton(s.id) },
               ]}
             />
           </section>
-        </div>
-      </div>
     </div>
   );
 }

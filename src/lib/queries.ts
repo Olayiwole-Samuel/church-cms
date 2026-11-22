@@ -10,7 +10,8 @@ export async function dashboard() {
   const d = today();
   const row = await one<{
     attendance_today: number;
-    first_timers_today: number;
+    workers_today: number;
+    checked_in_today: number;
     altar_call_today: number;
     academy_ready: number;
     pending_reviews: number;
@@ -19,9 +20,12 @@ export async function dashboard() {
     waiting_corner: number;
   }>(
     `SELECT
+       (SELECT coalesce(sum(h.male + h.female + h.children), 0)::int FROM service_headcounts h JOIN sessions s ON s.id = h.session_id
+         WHERE s.date = $1 AND s.archived_at IS NULL) AS attendance_today,
+       (SELECT count(DISTINCT da.person_id)::int FROM department_attendance da JOIN sessions s ON s.id = da.session_id
+         WHERE s.date = $1 AND s.archived_at IS NULL AND da.present) AS workers_today,
        (SELECT count(DISTINCT a.person_id)::int FROM attendance a JOIN sessions s ON s.id = a.session_id
-         WHERE s.date = $1 AND s.archived_at IS NULL AND a.present) AS attendance_today,
-       (SELECT count(*)::int FROM people WHERE first_visit_date = $1 AND status = 'active') AS first_timers_today,
+         WHERE s.date = $1 AND s.archived_at IS NULL AND a.present AND a.method = 'qr') AS checked_in_today,
        (SELECT count(DISTINCT a.person_id)::int FROM attendance a JOIN sessions s ON s.id = a.session_id
          WHERE s.date = $1 AND s.archived_at IS NULL AND a.altar_call) AS altar_call_today,
        (SELECT count(*)::int FROM person_academy_stats st JOIN people p ON p.id = st.person_id AND p.status = 'active'
@@ -42,8 +46,9 @@ export async function dashboard() {
 export const todaysServices = () =>
   query(
     `SELECT s.id, s.program_id, p.name AS program_name,
-            (SELECT count(*)::int FROM attendance a WHERE a.session_id = s.id AND a.present) AS present_count
+            (h.male + h.female + h.children)::int AS present_count
        FROM sessions s JOIN programs p ON p.id = s.program_id AND p.archived_at IS NULL
+       LEFT JOIN service_headcounts h ON h.session_id = s.id
       WHERE s.date = $1 AND s.archived_at IS NULL ORDER BY s.created_at`,
     [today()],
   );
@@ -166,33 +171,12 @@ export const getProgram = (id: string) => one(`SELECT * FROM programs WHERE id =
 
 export const listSessions = (programId: string) =>
   query(
-    `SELECT s.*,
-            (SELECT count(*)::int FROM attendance a WHERE a.session_id = s.id AND a.present) AS present_count,
+    `SELECT s.*, h.male, h.female, h.children,
+            (h.male + h.female + h.children)::int AS present_count,
             (SELECT count(*)::int FROM attendance a WHERE a.session_id = s.id AND a.altar_call) AS altar_count
-       FROM sessions s WHERE s.program_id = $1 AND s.archived_at IS NULL ORDER BY s.date DESC`,
+       FROM sessions s LEFT JOIN service_headcounts h ON h.session_id = s.id
+      WHERE s.program_id = $1 AND s.archived_at IS NULL ORDER BY s.date DESC`,
     [programId],
-  );
-
-export const sessionAttendance = (sessionId: string) =>
-  query(
-    `SELECT a.id, a.person_id, a.present, a.altar_call, a.method, a.recorded_at, p.full_name
-       FROM attendance a JOIN people p ON p.id = a.person_id
-      WHERE a.session_id = $1 ORDER BY a.recorded_at DESC`,
-    [sessionId],
-  );
-
-/** People who attended this program before and have no mark on this session yet. */
-export const unmarkedRoster = (sessionId: string) =>
-  query(
-    `SELECT DISTINCT p.id, p.full_name
-       FROM sessions cur
-       JOIN sessions s ON s.program_id = cur.program_id
-       JOIN attendance a ON a.session_id = s.id AND a.present
-       JOIN people p ON p.id = a.person_id AND p.status = 'active'
-      WHERE cur.id = $1
-        AND NOT EXISTS (SELECT 1 FROM attendance x WHERE x.session_id = cur.id AND x.person_id = p.id)
-      ORDER BY p.full_name`,
-    [sessionId],
   );
 
 export const recentSessions = (limit = 30) =>
@@ -240,9 +224,11 @@ export const absenceAlerts = (includeResolved = false) =>
   );
 
 // ---------------------------------------------------------------- altar call
-export const altarCallMonitor = () =>
+/** With a session, also says whether each person was marked at that service. */
+export const altarCallMonitor = (sessionId: string | null = null) =>
   query(
     `SELECT p.id, p.full_name, p.phone, pt.applied_at,
+            mark.id AS mark_id, coalesce(mark.present, false) AS came, coalesce(mark.altar_call, false) AS came_forward,
             coalesce((SELECT max(st.current_streak) FROM person_program_stats st WHERE st.person_id = p.id), 0) AS streak,
             coalesce((SELECT a.sunday_streak FROM person_academy_stats a WHERE a.person_id = p.id), 0) AS sunday_streak,
             (SELECT f.id FROM follow_ups f WHERE f.person_id = p.id AND f.status = 'open' AND f.priority = 'high'
@@ -251,8 +237,10 @@ export const altarCallMonitor = () =>
        FROM person_tags pt
        JOIN tags t ON t.id = pt.tag_id AND t.name = 'Altar Call'
        JOIN people p ON p.id = pt.person_id AND p.status = 'active'
+       LEFT JOIN attendance mark ON mark.person_id = p.id AND mark.session_id = $1::uuid
       WHERE pt.removed_at IS NULL
       ORDER BY streak DESC, p.full_name`,
+    [sessionId],
   );
 
 // ---------------------------------------------------------------- academy
@@ -385,12 +373,13 @@ export async function report(type: string) {
   switch (type) {
     case "attendance-trends":
       return query(
-        `SELECT s.date, p.name AS program_name, count(a.id) FILTER (WHERE a.present)::int AS present,
-                count(a.id) FILTER (WHERE a.altar_call)::int AS altar_call
+        `SELECT s.date, p.name AS program_name, h.male, h.female, h.children,
+                (h.male + h.female + h.children)::int AS present,
+                (SELECT count(*)::int FROM attendance a WHERE a.session_id = s.id AND a.altar_call) AS altar_call
            FROM sessions s JOIN programs p ON p.id = s.program_id AND p.archived_at IS NULL
-           LEFT JOIN attendance a ON a.session_id = s.id
+           JOIN service_headcounts h ON h.session_id = s.id
           WHERE s.archived_at IS NULL AND s.date <= $1
-          GROUP BY s.id, s.date, p.name ORDER BY s.date DESC LIMIT 60`,
+          ORDER BY s.date DESC LIMIT 60`,
         [d],
       ).then((rows) => rows.reverse());
     case "engagement-funnel":
@@ -452,8 +441,9 @@ const monthLabel = (month: string, short = false) =>
   new Date(`${month}-01T00:00:00Z`).toLocaleDateString("en-GB", short ? { month: "short", year: "2-digit", timeZone: "UTC" } : { month: "long", year: "numeric", timeZone: "UTC" });
 
 /**
- * The monthly count: how many people were present at each service. Services are listed
- * and averaged, never added together. Opens on the last complete month by default.
+ * The monthly count: the headcount entered for each service. Services are listed and
+ * averaged, never added together, and a service with no numbers yet is left out of the
+ * averages rather than counted as zero. Opens on the last complete month by default.
  */
 export async function monthlyAttendance(requestedMonth?: string | null, requestedProgram?: string | null) {
   const d = today();
@@ -462,35 +452,36 @@ export async function monthlyAttendance(requestedMonth?: string | null, requeste
   const programs = await query<{ id: string; name: string }>(`SELECT id, name FROM programs WHERE archived_at IS NULL ORDER BY is_sunday DESC, name`);
   const programId = programs.some((p) => p.id === requestedProgram) ? requestedProgram! : null;
 
-  const rows = await query<{ id: string; program_id: string; date: string; program_name: string; present: number; month: string }>(
+  const rows = await query<{
+    id: string; program_id: string; date: string; program_name: string; month: string;
+    male: number | null; female: number | null; children: number | null; present: number | null;
+  }>(
     `SELECT s.id, s.program_id, s.date, p.name AS program_name, to_char(s.date, 'YYYY-MM') AS month,
-            (SELECT count(*)::int FROM attendance a WHERE a.session_id = s.id AND a.present) AS present
+            h.male, h.female, h.children, (h.male + h.female + h.children)::int AS present
        FROM sessions s JOIN programs p ON p.id = s.program_id AND p.archived_at IS NULL
+       LEFT JOIN service_headcounts h ON h.session_id = s.id
       WHERE s.archived_at IS NULL AND s.date <= $1 AND ($2::uuid IS NULL OR s.program_id = $2)
       ORDER BY s.date, s.created_at`,
     [d, programId],
   );
   const inMonth = (m: string) => rows.filter((r) => r.month === m);
+  const countsIn = (m: string) => inMonth(m).filter((r) => r.present !== null).map((r) => r.present!);
   const selected = inMonth(month);
-  const counts = selected.map((r) => r.present);
+  const entered = selected.filter((r) => r.present !== null);
+  const counts = countsIn(month);
   const changes = serviceChanges(counts);
+  const changeById = new Map(entered.map((r, i) => [r.id, changes[i]]));
   const summary = summariseMonth(counts);
   const previousMonth = shiftMonth(month, -1);
-  const previous = summariseMonth(inMonth(previousMonth).map((r) => r.present));
-
-  const unique = await one<{ n: number }>(
-    `SELECT count(DISTINCT a.person_id)::int AS n
-       FROM attendance a JOIN sessions s ON s.id = a.session_id AND s.archived_at IS NULL
-       JOIN programs p ON p.id = s.program_id AND p.archived_at IS NULL
-      WHERE a.present AND to_char(s.date, 'YYYY-MM') = $1 AND s.date <= $2 AND ($3::uuid IS NULL OR s.program_id = $3)`,
-    [month, d, programId],
-  );
+  const previous = summariseMonth(countsIn(previousMonth));
+  const averageOf = (key: "male" | "female" | "children") =>
+    entered.length ? Math.round((entered.reduce((sum, r) => sum + r[key]!, 0) / entered.length) * 10) / 10 : 0;
 
   const earliest = rows[0]?.month ?? current;
   const trend = [];
   for (let i = 11; i >= 0; i--) {
     const m = shiftMonth(month, -i);
-    const s = summariseMonth(inMonth(m).map((r) => r.present));
+    const s = summariseMonth(countsIn(m));
     if (s.serviceCount > 0) trend.push({ date: m, label: monthLabel(m, true), value: s.average, services: s.serviceCount });
   }
 
@@ -506,10 +497,14 @@ export async function monthlyAttendance(requestedMonth?: string | null, requeste
     programs,
     programId,
     summary,
-    uniquePeople: unique?.n ?? 0,
+    breakdown: { male: averageOf("male"), female: averageOf("female"), children: averageOf("children") },
+    notEntered: selected.length - entered.length,
     previous: { label: monthLabel(previousMonth), ...previous },
     comparison: compareMonths(summary, previous),
-    services: selected.map((r, i) => ({ id: r.id, program_id: r.program_id, date: r.date, program_name: r.program_name, present: r.present, change: changes[i] })),
+    services: selected.map((r) => ({
+      id: r.id, program_id: r.program_id, date: r.date, program_name: r.program_name,
+      male: r.male, female: r.female, children: r.children, present: r.present, change: changeById.get(r.id) ?? null,
+    })),
     trend,
   };
 }
@@ -521,6 +516,7 @@ export const EXPORT_QUERIES: Record<string, string> = {
   person_tags: `SELECT pt.id, pt.person_id, p.full_name, t.name AS tag, pt.applied_at, pt.removed_at FROM person_tags pt JOIN people p ON p.id = pt.person_id JOIN tags t ON t.id = pt.tag_id ORDER BY pt.applied_at`,
   programs: `SELECT id, name, type, counts_toward_streak, is_sunday, qr_token, created_at, archived_at FROM programs ORDER BY name`,
   sessions: `SELECT s.id, s.program_id, p.name AS program, s.date, s.notes, s.archived_at FROM sessions s JOIN programs p ON p.id = s.program_id ORDER BY s.date`,
+  service_headcounts: `SELECT h.id, h.session_id, s.date, pr.name AS program, h.male, h.female, h.children, h.male + h.female + h.children AS total, h.recorded_by, h.recorded_at FROM service_headcounts h JOIN sessions s ON s.id = h.session_id JOIN programs pr ON pr.id = s.program_id ORDER BY s.date`,
   attendance: `SELECT a.id, a.session_id, s.date, pr.name AS program, a.person_id, p.full_name, a.present, a.altar_call, a.recorded_by, a.method, a.recorded_at FROM attendance a JOIN sessions s ON s.id = a.session_id JOIN programs pr ON pr.id = s.program_id JOIN people p ON p.id = a.person_id ORDER BY s.date, p.full_name`,
   departments: `SELECT id, name, qr_token, created_at, archived_at FROM departments ORDER BY name`,
   department_memberships: `SELECT m.id, m.person_id, p.full_name, m.department_id, d.name AS department, m.status, m.joined_at, m.removed_at FROM department_memberships m JOIN people p ON p.id = m.person_id JOIN departments d ON d.id = m.department_id ORDER BY d.name, p.full_name`,

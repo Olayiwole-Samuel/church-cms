@@ -404,6 +404,7 @@ textarea { min-height: 88px; resize: vertical; }
 input:focus-visible, textarea:focus-visible, select:focus-visible { outline-offset: 0; }
 .field { margin-bottom: 12px; }
 .fields { display: grid; gap: 0 12px; grid-template-columns: minmax(0, 1fr); }
+.headcount-fields { display: grid; gap: 0 12px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 @media (min-width: 720px) { .fields.two { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .filters { display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr); margin-bottom: 12px; }
 @media (min-width: 720px) { .filters { grid-template-columns: 2fr 1fr 1fr auto; } }

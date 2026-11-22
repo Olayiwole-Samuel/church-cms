@@ -6,7 +6,7 @@ const name = process.env.NEXT_PUBLIC_CHURCH_NAME || "The Triumphant Family";
 
 export const metadata: Metadata = {
   title: name,
-  description: "The Gleam of Salvation Apostolic Ministry: attendance, engagement, departments and follow-ups.",
+  description: "The Gleam of Salvation Apostolic Ministry: attendance, QR check-in, altar call, departments and follow-ups.",
   manifest: "/manifest.webmanifest",
   appleWebApp: { capable: true, title: "Triumphant", statusBarStyle: "black-translucent" },
   icons: { icon: "/icon-192.png", apple: "/icon-192.png" },

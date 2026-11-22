@@ -65,7 +65,7 @@ export default function DepartmentCheckin() {
   }
 
   async function notMe() {
-    await api(`/api/checkin/${token}`, "DELETE");
+    await api(url, "DELETE");
     setState(null);
     load();
   }

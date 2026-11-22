@@ -1,9 +1,10 @@
 # The Triumphant Family: Church CMS
 
-For The Gleam of Salvation Apostolic Ministry. A custom church management system for one central admin: attendance per program, engagement
-tracking, an Altar Call track, Discipleship Academy eligibility, departments with a reversible
-Waiting Corner, mandatory service reviews, QR self-check-in, follow-ups, absence alerts, reports,
-exports and an audit log.
+For The Gleam of Salvation Apostolic Ministry. A custom church management system for one central admin: a
+male, female and children headcount per service, an Altar Call track, Discipleship Academy eligibility,
+departments with a reversible Waiting Corner, one QR check-in code for members, a department QR for
+workers, mandatory service reviews,
+follow-ups, absence alerts, reports, exports and an audit log.
 
 Built with Next.js (App Router, TypeScript), PostgreSQL 15 or newer, and plain SQL migrations.
 It is mobile-first and installable as a PWA.
@@ -153,13 +154,20 @@ curl -H "Authorization: Bearer YOUR_CRON_SECRET" http://localhost:3000/api/cron/
 
 ## Running a service
 
-1. Create the session for the day: on the program's page, or with **Start today's session** on Take
-   Attendance. **QR check-in only works once today's session exists.** A scan never creates a session,
-   so a code scanned at home on a Tuesday cannot create a false service.
-2. People scan the program QR. New devices register once, and returning devices get one tap.
-3. Mark altar call on Take Attendance. It is never self-selected.
-4. Department members scan their department QR.
-5. Submit a review for each department under Service Reviews.
+1. Start the service: **Start today's service** on Take Attendance, or add a session on the program's page.
+   **QR check-in only works once today's session exists.** A scan never creates a session, so a code
+   scanned at home on a Tuesday cannot create a false service.
+2. Members scan the church check-in QR, shown on Take Attendance. It is one code for every service. The first
+   scan on a phone asks for name and phone. After that, scanning marks them present with nothing to type or tap.
+   If two services run on the same day, they choose which one.
+3. Workers scan their department QR.
+4. On Take Attendance, enter how many male, female and children were present, counting everyone. Saving again
+   corrects the numbers. The headcount is the church's attendance figure; scans track people by name.
+5. On Altar Call, use **Add person** for each person who came out, with their name and details. This gives
+   them the Altar Call tag and a high-priority follow-up.
+6. At later services, press **Came to this service** on their Altar Call card, which builds their streak. If
+   they stop coming, they appear in Follow-Ups.
+7. Submit a review for each department under Service Reviews.
 
 ## How rules were interpreted
 
@@ -177,7 +185,11 @@ the system does. Each one is a place to check against what you intended.
 | Marking present after a miss | The counter resets, but someone already in the Waiting Corner stays there until you press Restore. |
 | Moving departments | Admin only, and not while someone is in the Waiting Corner. The old membership is kept as history. After permanent removal, an admin can place the person in a different department but never back in the same one, and they cannot self-join. |
 | Who needs a review note | Everyone who was a member on the date of that service and is not archived. Summary is required; challenges and highlights are optional. |
+| Church attendance | One set of numbers per service: male, female and children. Total is the sum. A service with no numbers shows "Not entered" and is left out of averages, not counted as zero. |
+| Who is tracked by name | Members who scan the church QR, workers (department scans) and the altar-call track. Someone who never scans has no streak, status or absence follow-up. Scans do not change the headcount, and the headcount does not create people. |
+| One check-in code | Stored in `church_settings`. The migration keeps the code already printed at the church. Older program codes still work and check in to that day's service. |
 | Self-registration phone | Required, alongside name, because duplicate detection depends on it. Email is optional. |
+| Altar call details | Only the name is required, because not everyone gives a phone number. Same name and phone links to the existing person. A partial match creates a new person and flags the pair on the People page. |
 | Duplicates | Same phone and same name links to the existing person. Same phone or same name alone creates a new person and flags the pair on the People page, since it may be a relative or a namesake. Merging is v1.5. |
 | Rate limit | 300 requests a minute per IP address, set high because a whole congregation may share church Wi-Fi. Change with `CHECKIN_RATE_LIMIT_PER_MINUTE`. |
 
@@ -187,7 +199,7 @@ Additions to the listed data model, all needed to make a specified behaviour wor
 
 ## Monthly Report
 
-Reports > Monthly report counts the people present at each service. Services are never added together: if
+Reports > Monthly report uses the headcount entered for each service. Services are never added together: if
 24 came to one service and 20 to the next, the report shows 24 and 20, not 44. To say whether a month went
 up or down, it compares the average per service with the month before, so a month with more services does
 not look bigger. It also lists every service, a 12-month trend, a filter for one program, and CSV or Excel
@@ -195,8 +207,8 @@ download. It opens on the last complete month, and the current month is labelled
 
 ## People who stop coming
 
-Anyone who missed the latest service of every program they attend gets a card in Follow-Ups, after one
-miss, and it stays open for as long as they are away. A Sunday regular is not flagged for skipping midweek.
+This applies to people recorded by name: QR check-ins and the altar-call track. Anyone who missed the latest
+service of every program they attend gets a card in Follow-Ups, after one miss, and it stays open for as long as they are away. A Sunday regular is not flagged for skipping midweek.
 The card closes by itself when they return, and returns if they stop again. The only action on it is Remove,
 which archives the person after a confirmation. Their history is kept, and they can be restored from People.
 A person keeps one card, relabelled Not coming, First timer or Dropped off. Altar-call follow-ups are separate
@@ -207,6 +219,7 @@ and are marked done by hand.
 - **API paths** follow the outline in the specification with an `/api` prefix, because the screens use
   the same paths (`/people` is a page, `/api/people` its API). Public pages are `/checkin/:token` and
   `/checkin/dept/:token`. Additional routes cover things the screens need: `/api/sessions/:id`,
+  `/api/sessions/:id/headcount`, `/api/altar-call`, `/api/checkin-qr`,
   `/api/departments/:id/close-out`, `/api/departments/:id/members`, `/api/auth/logout`,
   `/api/people/duplicates`.
 - **Audit log:** a database trigger records every insert and update on the main tables, so no code path
@@ -215,4 +228,4 @@ and are marked done by hand.
   rebuilt from attendance and are never the source of truth.
 - **Changing the admin password:** change `ADMIN_PASSWORD` and run `npm run db:seed` again.
 - **Device tokens** are cookies on the phone. Clearing browser data means registering again. A phone
-  belongs to one person until household check-in arrives in v1.5, and "Not you?" switches person.
+  belongs to one person, and "Not you?" switches person.

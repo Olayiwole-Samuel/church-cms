@@ -1,15 +1,9 @@
 import { z } from "zod";
 import { txOne, txRows, withTx } from "@/lib/db";
 import { adminRoute, notFound } from "@/lib/http";
-import { sessionAttendance, unmarkedRoster } from "@/lib/queries";
 import { recomputePeople } from "@/lib/recompute";
 
 const schema = z.object({ notes: z.string().trim().nullish(), archived: z.boolean().optional() });
-
-export const GET = adminRoute<{ id: string }>(async ({ params }) => ({
-  attendance: await sessionAttendance(params.id),
-  unmarked: await unmarkedRoster(params.id),
-}));
 
 export const PUT = adminRoute<{ id: string }>(async ({ req, params, actor }) => {
   const { notes, archived } = schema.parse(await req.json());

@@ -62,21 +62,14 @@ export function forgetDevice(response: NextResponse) {
 export interface TodaySession {
   id: string;
   date: string;
+  program_id: string;
   program_name: string;
 }
 
-/** Today's session for one program: the only session a program QR can write to. */
-export async function todaysProgramSession(programId: string) {
-  return one<{ id: string; date: string }>(
-    `SELECT id, date FROM sessions WHERE program_id = $1 AND date = $2 AND archived_at IS NULL`,
-    [programId, today()],
-  );
-}
-
-/** All services today. Department QR codes are permanent and not tied to one program. */
+/** All services today. Check-in QR codes are permanent and not tied to one service. */
 export async function todaysSessions() {
   return query<TodaySession>(
-    `SELECT s.id, s.date, p.name AS program_name
+    `SELECT s.id, s.date, s.program_id, p.name AS program_name
        FROM sessions s JOIN programs p ON p.id = s.program_id AND p.archived_at IS NULL
       WHERE s.date = $1 AND s.archived_at IS NULL
       ORDER BY s.created_at`,
@@ -102,4 +95,18 @@ export async function departmentState(tx: Tx, personId: string) {
     current: memberships.find((m) => !m.removed_at) ?? null,
     permanentlyRemoved: memberships.some((m) => m.status === "permanently_removed"),
   };
+}
+
+export async function churchCheckinToken(): Promise<string | null> {
+  return (await one<{ value: string }>(`SELECT value FROM church_settings WHERE key = 'checkin_token'`))?.value ?? null;
+}
+
+/**
+ * What a member check-in code is. The church code covers every service. An older
+ * program code works the same way, but prefers its own program when two run on one day.
+ */
+export async function checkinSource(token: string): Promise<{ programId: string | null } | null> {
+  if (token === (await churchCheckinToken())) return { programId: null };
+  const program = await one<{ id: string }>(`SELECT id FROM programs WHERE qr_token = $1 AND archived_at IS NULL`, [token]);
+  return program ? { programId: program.id } : null;
 }

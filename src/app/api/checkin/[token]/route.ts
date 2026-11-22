@@ -2,67 +2,76 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import {
   assertActive,
+  checkinSource,
   firstName,
   forgetDevice,
   limitCheckin,
   linkDevice,
   personFromDevice,
-  todaysProgramSession,
+  todaysSessions,
   withDeviceCookie,
 } from "@/lib/checkin";
-import { one, withTx } from "@/lib/db";
+import { churchName } from "@/lib/config";
+import { query, withTx } from "@/lib/db";
+import { pickCheckinSession } from "@/lib/engine";
 import { HttpError, notFound, publicRoute } from "@/lib/http";
 import { recordAttendance, registerSelf } from "@/lib/services";
 
-const programByToken = (token: string) =>
-  one<{ id: string; name: string }>(`SELECT id, name FROM programs WHERE qr_token = $1 AND archived_at IS NULL`, [token]);
-
-const registration = z.object({
-  full_name: z.string().trim().min(1, "Please enter your name").max(200),
-  phone: z.string().trim().min(5, "Please enter your phone number").max(40),
+const schema = z.object({
+  session_id: z.string().uuid().nullish(),
+  full_name: z.string().trim().max(200).optional(),
+  phone: z.string().trim().max(40).optional(),
   email: z.string().trim().email().max(200).or(z.literal("")).nullish(),
 });
 
 export const GET = publicRoute<{ token: string }>(async ({ req, params }) => {
   await limitCheckin(req, "read");
-  const program = await programByToken(params.token);
-  if (!program) throw notFound("Program");
-  const session = await todaysProgramSession(program.id);
+  const source = await checkinSource(params.token);
+  if (!source) throw notFound("Check-in code");
+  const sessions = await todaysSessions();
   const person = await personFromDevice(req);
-  const already =
-    person && session
-      ? await one(`SELECT 1 AS x FROM attendance WHERE session_id = $1 AND person_id = $2 AND present`, [session.id, person.id])
-      : null;
+  const checked = person
+    ? await query<{ session_id: string }>(
+        `SELECT session_id FROM attendance WHERE person_id = $1 AND present AND session_id = ANY($2::uuid[])`,
+        [person.id, sessions.map((s) => s.id)],
+      )
+    : [];
+  const pick = pickCheckinSession(sessions, { preferredProgramId: source.programId });
   return {
-    program: { name: program.name },
-    session: session ? { date: session.date } : null,
+    church: churchName(),
+    sessions: sessions.map((s) => ({ id: s.id, program_name: s.program_name, checked_in: checked.some((c) => c.session_id === s.id) })),
+    auto_session_id: pick && pick !== "choose" ? pick.id : null,
     person: person ? { first_name: firstName(person.full_name) } : null,
-    already_checked_in: Boolean(already),
   };
 });
 
-// The session is resolved on the server: this endpoint can only ever write to today's
-// session of the program named by the QR token. Altar call is never accepted here.
+// Writes only to a service held today. Altar call is never accepted here.
 export const POST = publicRoute<{ token: string }>(async ({ req, params }) => {
   await limitCheckin(req, "write");
-  const program = await programByToken(params.token);
-  if (!program) throw notFound("Program");
-  const session = await todaysProgramSession(program.id);
-  if (!session) throw new HttpError(409, "There is no service open for check-in today.");
+  const source = await checkinSource(params.token);
+  if (!source) throw notFound("Check-in code");
+  const input = schema.parse(await req.json());
+
+  const sessions = await todaysSessions();
+  if (sessions.length === 0) throw new HttpError(409, "There is no service open for check-in today.");
+  const session = pickCheckinSession(sessions, { preferredProgramId: source.programId, chosenId: input.session_id });
+  if (session === "choose") throw new HttpError(400, "Please choose which service you are attending.");
+  if (!session) throw new HttpError(400, "That service is not open for check-in today.");
 
   const known = await personFromDevice(req);
   if (known) assertActive(known);
-  const input = known ? null : registration.parse(await req.json());
+  if (!known) {
+    if (!input.full_name) throw new HttpError(400, "Please enter your name.");
+    if (!input.phone || input.phone.length < 5) throw new HttpError(400, "Please enter your phone number.");
+  }
 
-  const { name, token } = await withTx("public:qr", async (tx) => {
-    const personId = known?.id ?? (await registerSelf(tx, { ...input!, source: "qr" }));
+  const result = await withTx("public:qr", async (tx) => {
+    const personId =
+      known?.id ?? (await registerSelf(tx, { full_name: input.full_name!, phone: input.phone, email: input.email, source: "qr" }));
     await recordAttendance(tx, { sessionId: session.id, personId, present: true, method: "qr", recordedBy: "self" });
-    return {
-      name: firstName(known?.full_name ?? input!.full_name),
-      token: await linkDevice(tx, req, personId),
-    };
+    return { token: await linkDevice(tx, req, personId), name: firstName(known?.full_name ?? input.full_name!) };
   });
-  return withDeviceCookie(NextResponse.json({ ok: true, first_name: name, program: program.name }), token);
+  return withDeviceCookie(NextResponse.json({ ok: true, first_name: result.name, program: session.program_name }), result.token);
 });
 
 /** "Not you?" on a shared phone: this device forgets the person. */

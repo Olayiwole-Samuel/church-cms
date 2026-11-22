@@ -226,3 +226,18 @@ export const isSundayDate =(date: string) => new Date(`${date}T00:00:00Z`).getUT
 export const normalizePhone = (phone: string | null | undefined) => (phone ?? "").replace(/\D/g, "");
 export const normalizeName = (name: string | null | undefined) =>
   (name ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+
+/**
+ * Which of today's services a member check-in goes to: the one they chose, else the scanned
+ * program's own service, else the only service today. "choose" when more than one could apply.
+ */
+export function pickCheckinSession<T extends { id: string; program_id: string }>(
+  sessions: T[],
+  opts: { chosenId?: string | null; preferredProgramId?: string | null },
+): T | "choose" | null {
+  if (opts.chosenId) return sessions.find((s) => s.id === opts.chosenId) ?? null;
+  const own = opts.preferredProgramId ? sessions.find((s) => s.program_id === opts.preferredProgramId) : undefined;
+  if (own) return own;
+  if (sessions.length === 1) return sessions[0];
+  return sessions.length > 1 ? "choose" : null;
+}

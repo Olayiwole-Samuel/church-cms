@@ -5,6 +5,7 @@ import {
   computeProgramStats,
   EngineConfig,
   isSundayDate,
+  pickCheckinSession,
   compareMonths,
   serviceChanges,
   summariseMonth,
@@ -158,5 +159,23 @@ describe("5.3 department miss counter", () => {
     expect(shouldEnterWaitingCorner(2, "active")).toBe(true);
     expect(shouldEnterWaitingCorner(3, "waiting_corner")).toBe(false);
     expect(shouldEnterWaitingCorner(5, "permanently_removed")).toBe(false);
+  });
+});
+
+describe("which service a member check-in goes to", () => {
+  const sunday = { id: "s1", program_id: "sunday" };
+  const youth = { id: "s2", program_id: "youth" };
+  it("uses the only service today, whichever program the code was printed for", () => {
+    expect(pickCheckinSession([sunday], { preferredProgramId: null })).toBe(sunday);
+    expect(pickCheckinSession([sunday], { preferredProgramId: "midweek" })).toBe(sunday);
+  });
+  it("asks when two services run and the code does not belong to either", () => {
+    expect(pickCheckinSession([sunday, youth], { preferredProgramId: null })).toBe("choose");
+    expect(pickCheckinSession([sunday, youth], { preferredProgramId: "youth" })).toBe(youth);
+  });
+  it("honours a choice only if that service is open today, and finds nothing on a day with no service", () => {
+    expect(pickCheckinSession([sunday, youth], { chosenId: "s2" })).toBe(youth);
+    expect(pickCheckinSession([sunday], { chosenId: "other" })).toBeNull();
+    expect(pickCheckinSession([], {})).toBeNull();
   });
 });

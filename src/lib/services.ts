@@ -103,7 +103,7 @@ export interface AttendanceInput {
   personId: string;
   present: boolean;
   altarCall?: boolean;
-  method: "admin" | "qr" | "on_behalf";
+  method: "admin" | "qr";
   recordedBy: string;
 }
 
@@ -114,7 +114,7 @@ export async function recordAttendance(tx: Tx, input: AttendanceInput) {
   if (!person) throw notFound("Person");
   if (person.status !== "active") throw new HttpError(409, "This person is archived. Restore them first.");
 
-  // A QR scan leaves altar_call untouched, since only the admin sets it.
+  // A QR scan or a later visit leaves altar_call untouched, since only the admin sets it.
   const altar = input.present ? (input.altarCall ?? null) : false;
   const row = await txOne<{ id: string; altar_call: boolean; present: boolean }>(
     tx,
@@ -163,20 +163,37 @@ export async function setAltarCall(tx: Tx, attendanceId: string, altarCall: bool
   else await reconcileAltarTag(tx, row.person_id);
 }
 
-/** Bulk "mark absent". Never overwrites someone already marked. */
-export async function markAbsentBulk(tx: Tx, sessionId: string, personIds: string[], recordedBy: string) {
-  await openSession(tx, sessionId);
-  const inserted = await txRows<{ person_id: string }>(
+/**
+ * The church's attendance for one service: three numbers typed in by the admin.
+ * Saving again corrects the numbers, so a service only ever has one set.
+ */
+export async function saveHeadcount(
+  tx: Tx,
+  input: { sessionId: string; male: number; female: number; children: number; recordedBy: string },
+) {
+  await openSession(tx, input.sessionId);
+  const row = await txOne<{ male: number; female: number; children: number }>(
     tx,
-    `INSERT INTO attendance (session_id, person_id, present, recorded_by, method)
-     SELECT $1, p.id, false, $3, 'admin' FROM people p
-      WHERE p.id = ANY($2::uuid[]) AND p.status = 'active'
-     ON CONFLICT (session_id, person_id) DO NOTHING
-     RETURNING person_id`,
-    [sessionId, personIds, recordedBy],
+    `INSERT INTO service_headcounts (session_id, male, female, children, recorded_by)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (session_id) DO UPDATE
+       SET male = EXCLUDED.male, female = EXCLUDED.female, children = EXCLUDED.children,
+           recorded_by = EXCLUDED.recorded_by, recorded_at = now()
+     RETURNING male, female, children`,
+    [input.sessionId, input.male, input.female, input.children, input.recordedBy],
   );
-  await recomputePeople(tx, inserted.map((r) => r.person_id));
-  return inserted.length;
+  return { ...row!, total: row!.male + row!.female + row!.children };
+}
+
+/**
+ * Someone who came out at altar call, typed in by the admin. Links to the existing person
+ * when name and phone both match, then starts the usual monitoring: the Altar Call tag and
+ * a high-priority follow-up. They are already inside the service's headcount, so it is unchanged.
+ */
+export async function addAltarCall(tx: Tx, sessionId: string, input: PersonInput, recordedBy: string) {
+  const personId = await registerSelf(tx, { ...input, source: "altar_call" });
+  await recordAttendance(tx, { sessionId, personId, present: true, altarCall: true, method: "admin", recordedBy });
+  return { id: personId };
 }
 
 // ---------------------------------------------------------------- programs and sessions

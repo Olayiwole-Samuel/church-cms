@@ -4,6 +4,7 @@ import {
   assertActive,
   departmentState,
   firstName,
+  forgetDevice,
   limitCheckin,
   linkDevice,
   personFromDevice,
@@ -116,3 +117,6 @@ export const POST = publicRoute<{ token: string }>(async ({ req, params }) => {
     result.token,
   );
 });
+
+/** "Not you?" on a shared phone: this device forgets the person. */
+export const DELETE = publicRoute(async () => forgetDevice(NextResponse.json({ ok: true })));

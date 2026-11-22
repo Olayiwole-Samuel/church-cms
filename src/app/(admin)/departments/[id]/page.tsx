@@ -48,7 +48,7 @@ export default async function DepartmentPage({ params }: { params: Promise<{ id:
         <div className="side">
           <section className="card">
             <h2>Permanent QR code</h2>
-            <p className="small muted">A person&apos;s first scan locks them to a department. Only you can change it afterwards.</p>
+            <p className="small muted">For workers. Members use the church check-in QR on Take Attendance. A worker&apos;s first scan locks them to a department, and only you can change it afterwards.</p>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img className="qr-box" src={`/api/departments/${id}/qr?format=png`} alt={`Check-in QR code for ${department.name}`} />
             <div className="row" style={{ marginTop: "0.75rem" }}>

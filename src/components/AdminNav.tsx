@@ -15,7 +15,7 @@ const SCREENS: [string, string, string, string][] = [
   ["Follow-Ups", "/follow-ups", "bubble", "#007aff"],
   ["Programs", "/programs", "calendar", "#ff3b30"],
   ["Engagement", "/engagement", "chart", "#34c759"],
-  ["Altar Call Monitor", "/altar-call", "flame", "#ff9500"],
+  ["Altar Call", "/altar-call", "flame", "#ff9500"],
   ["Discipleship Academy", "/academy", "cap", "#5856d6"],
   ["Departments", "/departments", "grid", "#00a5c8"],
   ["Department Attendance", "/department-attendance", "seal", "#00a5c8"],

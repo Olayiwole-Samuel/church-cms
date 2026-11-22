@@ -61,13 +61,13 @@ export default async function DashboardPage() {
 
   const stats: [string, number, string, string, string][] = [
     ["Today's attendance", d.attendance_today, "/attendance", "checklist", "#7c3265"],
-    ["First timers today", d.first_timers_today, "/engagement?view=first-timers", "people", "#34c759"],
+    ["Workers checked in today", d.workers_today, "/department-attendance", "seal", "#34c759"],
+    ["Scanned in today", d.checked_in_today, "/attendance", "people", "#5ac8fa"],
     ["Altar call today", d.altar_call_today, "/altar-call", "flame", "#ff9500"],
-    ["Academy ready", d.academy_ready, "/academy", "cap", "#5856d6"],
     ["Pending reviews", d.pending_reviews, "/reviews", "doc", "#af52de"],
     ["Open follow-ups", d.open_follow_ups, "/follow-ups", "bubble", "#00a5c8"],
     ["Absence alerts", d.absence_alerts, "/engagement?view=absence-alerts", "clock", "#ff3b30"],
-    ["In Waiting Corner", d.waiting_corner, "/waiting-corner", "hourglass", "#a2845e"],
+    ["Academy ready", d.academy_ready, "/academy", "cap", "#5856d6"],
   ];
 
   const trendProgram = programs.find((p) => p.is_sunday) ?? programs[0];
@@ -112,7 +112,7 @@ export default async function DashboardPage() {
 
         <Panel title="Today's services" href="/programs" count={services.length} empty="No service today. Start one from Take Attendance." className="span-2-tablet">
           {services.map((s) => (
-            <Row key={s.id} href={`/attendance?program=${s.program_id}&session=${s.id}`} title={s.program_name} sub={`${s.present_count} present`} />
+            <Row key={s.id} href={`/attendance?program=${s.program_id}&session=${s.id}`} title={s.program_name} sub={s.present_count === null ? "Attendance not entered" : `${s.present_count} present`} />
           ))}
         </Panel>
 

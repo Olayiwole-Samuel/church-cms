@@ -18,7 +18,6 @@ export const GET = adminRoute<{ id: string }>(async ({ params }) => {
   return program;
 });
 
-// The qr_token is never updated: QR codes are permanent.
 export const PUT = adminRoute<{ id: string }>(async ({ req, params, actor }) => {
   const { archived, ...input } = schema.parse(await req.json());
   return withTx(actor, async (tx) => {

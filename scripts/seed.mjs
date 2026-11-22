@@ -101,6 +101,12 @@ async function seedDemo() {
     );
     sessions.push(rows[0]);
   }
+  for (const [i, session] of sessions.entries()) {
+    await client.query(
+      `INSERT INTO service_headcounts (session_id, male, female, children, recorded_by) VALUES ($1, $2, $3, $4, 'seed')`,
+      [session.id, 40 + i * 2, 55 + i * 3, 20 + i],
+    );
+  }
 
   // Index = which of the 8 Sundays (oldest first) each person attended.
   const patterns = [

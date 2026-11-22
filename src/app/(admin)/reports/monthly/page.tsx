@@ -48,7 +48,8 @@ export default async function MonthlyReportPage({ searchParams }: { searchParams
           <div className="stat flat"><b>{r.summary.lowest}</b><span>Lowest service</span></div>
         </div>
         <p className="small muted" style={{ margin: "12px 0 0" }}>
-          {r.uniquePeople} different {r.uniquePeople === 1 ? "person" : "people"} came at least once this month. Services are not added together.
+          Average per service: {r.breakdown.male} male, {r.breakdown.female} female, {r.breakdown.children} children. Services are not added together.
+          {r.notEntered > 0 && ` ${r.notEntered} ${r.notEntered === 1 ? "service has" : "services have"} no numbers yet and ${r.notEntered === 1 ? "is" : "are"} left out.`}
         </p>
       </section>
 
@@ -62,17 +63,20 @@ export default async function MonthlyReportPage({ searchParams }: { searchParams
             <div className="spread">
               <span>
                 {s.program_name}
-                <span className="sub">{fmtDate(s.date)}. {signed(s.change)}{s.change === null ? "" : " from the service before"}</span>
+                <span className="sub">{fmtDate(s.date)}.{s.present === null ? " Not entered" : ` ${s.male} male, ${s.female} female, ${s.children} children. ${signed(s.change)}${s.change === null ? "" : " from the service before"}`}</span>
               </span>
-              <strong className="num" style={{ fontSize: 22 }}>{s.present}</strong>
+              <strong className="num" style={{ fontSize: 22 }}>{s.present ?? "—"}</strong>
             </div>
           )}
           columns={[
             { label: "Date", nowrap: true, render: (s) => fmtDate(s.date) },
             { label: "Service", render: (s) => s.program_name },
-            { label: "People present", align: "right", render: (s) => <strong>{s.present}</strong> },
+            { label: "Male", align: "right", render: (s) => s.male ?? "—" },
+            { label: "Female", align: "right", render: (s) => s.female ?? "—" },
+            { label: "Children", align: "right", render: (s) => s.children ?? "—" },
+            { label: "Total", align: "right", render: (s) => (s.present === null ? "Not entered" : <strong>{s.present}</strong>) },
             { label: "From the service before", align: "right", render: (s) => signed(s.change) },
-            { label: "Details", render: (s) => <Link className="btn sm" href={`/attendance?program=${s.program_id}&session=${s.id}`}>View</Link> },
+            { label: "Details", render: (s) => <Link className="btn sm" href={`/attendance?program=${s.program_id}&session=${s.id}`}>{s.present === null ? "Enter" : "Edit"}</Link> },
           ]}
         />
       </section>

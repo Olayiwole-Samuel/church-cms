@@ -4,11 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import EmbeddedPostgres from "embedded-postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { checkinSource, churchCheckinToken } from "../src/lib/checkin";
 import { today } from "../src/lib/config";
 import { closePool, one, query, Tx, withTx } from "../src/lib/db";
-import { monthlyAttendance } from "../src/lib/queries";
+import { altarCallMonitor, dashboard, monthlyAttendance } from "../src/lib/queries";
 import { closeOutSession, recomputePeople, runDaily } from "../src/lib/recompute";
 import {
+  addAltarCall,
   assignDepartment,
   createPerson,
   createSession,
@@ -19,6 +21,7 @@ import {
   recordDepartmentAttendance,
   registerSelf,
   restoreMember,
+  saveHeadcount,
   setAltarCall,
   submitReview,
 } from "../src/lib/services";
@@ -78,9 +81,10 @@ beforeAll(async () => {
   await server.createDatabase("cms_test");
   process.env.DATABASE_URL = `postgres://postgres:postgres@localhost:${PORT}/cms_test`;
   process.env.CHURCH_TIMEZONE = "UTC";
-  const sql = readFileSync(join(__dirname, "..", "migrations", "001_schema.sql"), "utf8");
   await tx(async (t) => {
-    await t.query(sql);
+    for (const file of ["001_schema.sql", "002_service_headcounts.sql", "003_church_checkin.sql"]) {
+      await t.query(readFileSync(join(__dirname, "..", "migrations", file), "utf8"));
+    }
   });
 }, 120_000);
 
@@ -168,12 +172,12 @@ describe("altar call", () => {
     expect(list).toHaveLength(1);
     expect(list[0].priority).toBe("high");
   });
-  it("a QR scan never sets or clears altar call", async () => {
-    const prog = await program("QR Altar");
-    const p = await person("QR Person");
+  it("marking someone present again never clears altar call", async () => {
+    const prog = await program("Repeat Altar");
+    const p = await person("Repeat Person");
     const s = await session(prog, shift(today(), -1));
     const row = await present(s, p, true);
-    await tx((t) => recordAttendance(t, { sessionId: s, personId: p, present: true, method: "qr", recordedBy: "self" }));
+    await present(s, p);
     expect((await one(`SELECT altar_call FROM attendance WHERE id = $1`, [row.id]))!.altar_call).toBe(true);
   });
   it("undoing the only altar-call mark removes the tag", async () => {
@@ -183,6 +187,117 @@ describe("altar call", () => {
     await tx((t) => setAltarCall(t, row.id, false));
     const tags = await query(`SELECT 1 AS x FROM person_tags WHERE person_id = $1 AND removed_at IS NULL`, [p]);
     expect(tags).toHaveLength(0);
+  });
+});
+
+describe("altar call entered by hand", () => {
+  const openAltar = async (id: string) => (await followUps(id)).filter((f) => f.reason === "altar_call" && f.status === "open");
+
+  it("creates the person with details, the tag and a high-priority follow-up", async () => {
+    const prog = await program("Manual Altar");
+    const s = await session(prog, shift(today(), -1));
+    const { id } = await tx((t) => addAltarCall(t, s, { full_name: "New Convert", phone: "08055550001", gender: "Female", address: "1 Hope St" }, actor));
+    const saved = await one(`SELECT * FROM people WHERE id = $1`, [id]);
+    expect(saved).toMatchObject({ full_name: "New Convert", phone: "08055550001", gender: "Female", address: "1 Hope St", source: "altar_call" });
+    const list = await openAltar(id);
+    expect(list).toHaveLength(1);
+    expect(list[0].priority).toBe("high");
+    const card = (await altarCallMonitor(s)).find((p) => p.id === id);
+    expect(card).toMatchObject({ came: true, came_forward: true });
+  });
+  it("needs only a name, and links to the same person rather than duplicating", async () => {
+    const prog = await program("Manual Altar Link");
+    const s1 = await session(prog, shift(today(), -8));
+    const s2 = await session(prog, shift(today(), -1));
+    const nameOnly = await tx((t) => addAltarCall(t, s1, { full_name: "Name Only Person" }, actor));
+    expect((await one(`SELECT phone FROM people WHERE id = $1`, [nameOnly.id]))!.phone).toBeNull();
+    const first = await tx((t) => addAltarCall(t, s1, { full_name: "Repeat Convert", phone: "08055550002" }, actor));
+    const again = await tx((t) => addAltarCall(t, s2, { full_name: "repeat convert", phone: "0805 555 0002" }, actor));
+    expect(again.id).toBe(first.id);
+    expect(await openAltar(first.id)).toHaveLength(1);
+  });
+  it("is monitored as normal: a marked visit builds the streak, a missed service raises a follow-up", async () => {
+    const prog = await program("Manual Altar Monitor");
+    const s1 = await session(prog, sundaysAgo(3));
+    const { id } = await tx((t) => addAltarCall(t, s1, { full_name: "Monitored Convert", phone: "08055550003" }, actor));
+    const s2 = await session(prog, sundaysAgo(2));
+    await present(s2, id);
+    expect((await stat(id, prog))!.current_streak).toBe(2);
+    expect((await altarCallMonitor(s2)).find((p) => p.id === id)).toMatchObject({ came: true, came_forward: false });
+    await session(prog, sundaysAgo(1));
+    await tx((t) => recomputePeople(t, [id]));
+    const open = (await followUps(id)).filter((f) => f.status === "open").map((f) => f.reason).sort();
+    expect(open).toEqual(["absence", "altar_call"]);
+  });
+  it("does not change the headcount for that service", async () => {
+    const prog = await program("Manual Altar Count");
+    const s = await session(prog, "2019-06-02");
+    await tx((t) => saveHeadcount(t, { sessionId: s, male: 3, female: 4, children: 1, recordedBy: actor }));
+    await tx((t) => addAltarCall(t, s, { full_name: "Counted Already", phone: "08055550004" }, actor));
+    expect((await monthlyAttendance("2019-06", prog)).services[0].present).toBe(8);
+  });
+});
+
+describe("service headcount", () => {
+  it("keeps one set of numbers per service, and saving again corrects it", async () => {
+    const prog = await program("Headcount Program");
+    const s = await session(prog, shift(today(), -2));
+    expect(await tx((t) => saveHeadcount(t, { sessionId: s, male: 10, female: 12, children: 5, recordedBy: actor }))).toMatchObject({ total: 27 });
+    expect(await tx((t) => saveHeadcount(t, { sessionId: s, male: 11, female: 12, children: 5, recordedBy: actor }))).toMatchObject({ total: 28 });
+    expect(await query(`SELECT 1 AS x FROM service_headcounts WHERE session_id = $1`, [s])).toHaveLength(1);
+    const log = await query(`SELECT action FROM audit_log WHERE entity = 'service_headcounts' AND after ->> 'session_id' = $1 ORDER BY id`, [s]);
+    expect(log.map((l) => l.action)).toEqual(["insert", "update"]);
+  });
+  it("refuses a future service, negative numbers and hard deletes", async () => {
+    const prog = await program("Headcount Rules");
+    const future = await session(prog, shift(today(), 3));
+    await expect(tx((t) => saveHeadcount(t, { sessionId: future, male: 1, female: 1, children: 1, recordedBy: actor }))).rejects.toThrow(/future/);
+    const past = await session(prog, shift(today(), -3));
+    await expect(tx((t) => saveHeadcount(t, { sessionId: past, male: -1, female: 1, children: 1, recordedBy: actor }))).rejects.toThrow(/check/i);
+    await tx((t) => saveHeadcount(t, { sessionId: past, male: 1, female: 1, children: 1, recordedBy: actor }));
+    await expect(tx((t) => t.query(`DELETE FROM service_headcounts WHERE session_id = $1`, [past]))).rejects.toThrow(/Hard delete/);
+  });
+  it("a headcount creates no one, so no follow-ups or statuses appear for members", async () => {
+    const before = (await one<{ n: number }>(`SELECT count(*)::int AS n FROM people`))!.n;
+    const prog = await program("Headcount Only");
+    const s = await session(prog, "2019-07-07");
+    await tx((t) => saveHeadcount(t, { sessionId: s, male: 50, female: 50, children: 50, recordedBy: actor }));
+    expect((await one<{ n: number }>(`SELECT count(*)::int AS n FROM people`))!.n).toBe(before);
+  });
+  it("feeds the dashboard, and a member with no marks is never flagged as absent", async () => {
+    const prog = await program("Headcount Dash");
+    const p = await person("Member Not Marked");
+    const before = (await dashboard()).attendance_today;
+    const s = await session(prog, today());
+    await tx((t) => saveHeadcount(t, { sessionId: s, male: 2, female: 3, children: 4, recordedBy: actor }));
+    expect((await dashboard()).attendance_today).toBe(before + 9);
+    await session(prog, shift(today(), -4));
+    await tx((t) => recomputePeople(t, [p]));
+    expect(await followUps(p)).toHaveLength(0);
+    expect(await stat(p, prog)).toBeNull();
+  });
+});
+
+describe("church check-in code", () => {
+  it("one church code covers every service; older program codes still work and prefer their own program", async () => {
+    const token = await churchCheckinToken();
+    expect(token).toMatch(/^[0-9a-f]{32}$/);
+    expect(await checkinSource(token!)).toEqual({ programId: null });
+    const prog = await program("Old Code Program");
+    const programToken = (await one(`SELECT qr_token FROM programs WHERE id = $1`, [prog]))!.qr_token;
+    expect(await checkinSource(programToken)).toEqual({ programId: prog });
+    expect(await checkinSource("not-a-code")).toBeNull();
+    await tx((t) => t.query(`UPDATE programs SET archived_at = now() WHERE id = $1`, [prog]));
+    expect(await checkinSource(programToken)).toBeNull();
+  });
+  it("a returning scanner is recorded once per service, with no duplicate person", async () => {
+    const prog = await program("Scan Program");
+    const s = await session(prog, shift(today(), -1));
+    const first = await tx((t) => registerSelf(t, { full_name: "Scan Member", phone: "08066660001", source: "qr" }));
+    await tx((t) => recordAttendance(t, { sessionId: s, personId: first, present: true, method: "qr", recordedBy: "self" }));
+    await tx((t) => recordAttendance(t, { sessionId: s, personId: first, present: true, method: "qr", recordedBy: "self" }));
+    expect(await query(`SELECT 1 AS x FROM attendance WHERE session_id = $1 AND person_id = $2`, [s, first])).toHaveLength(1);
+    expect((await stat(first, prog))!.status_badge).toBe("First Timer");
   });
 });
 
@@ -406,22 +521,33 @@ describe("duplicate detection on self-registration", () => {
 describe("monthly attendance report", () => {
   it("lists each service's own number and compares the monthly averages", async () => {
     const prog = await program("Monthly Program");
-    const people = [];
-    for (let i = 0; i < 6; i++) people.push(await person(`Monthly Person ${i}`));
-    const mark = async (date: string, who: string[]) => {
+    const count = async (date: string, male: number, female: number, children: number) => {
       const s = await session(prog, date);
-      for (const id of who) await present(s, id);
+      await tx((t) => saveHeadcount(t, { sessionId: s, male, female, children, recordedBy: actor }));
     };
-    await mark("2021-02-03", people.slice(0, 2)); // February: 2
-    await mark("2021-03-03", people.slice(0, 4)); // March: 4
-    await mark("2021-03-10", people.slice(2, 4)); // March: 2, the same two people again
+    await count("2021-02-03", 1, 1, 0); // February: 2
+    await count("2021-03-03", 2, 1, 1); // March: 4
+    await count("2021-03-10", 1, 1, 0); // March: 2
     const r = await monthlyAttendance("2021-03", prog);
     expect(r.services.map((s) => s.present)).toEqual([4, 2]);
     expect(r.services.map((s) => s.change)).toEqual([null, -2]);
     expect(r.summary.average).toBe(3);
-    expect(r.uniquePeople).toBe(4);
+    expect(r.breakdown).toEqual({ male: 1.5, female: 1, children: 0.5 });
     expect(r.comparison).toEqual({ net: 1, percent: 50 });
     expect(r.previous.average).toBe(2);
+  });
+  it("leaves a service with no numbers out of the averages, rather than counting it as zero", async () => {
+    const prog = await program("Monthly Missing");
+    const a = await session(prog, "2021-05-02");
+    await session(prog, "2021-05-09");
+    const c = await session(prog, "2021-05-16");
+    await tx((t) => saveHeadcount(t, { sessionId: a, male: 5, female: 5, children: 0, recordedBy: actor }));
+    await tx((t) => saveHeadcount(t, { sessionId: c, male: 10, female: 10, children: 0, recordedBy: actor }));
+    const r = await monthlyAttendance("2021-05", prog);
+    expect(r.services.map((s) => s.present)).toEqual([10, null, 20]);
+    expect(r.services.map((s) => s.change)).toEqual([null, null, 10]);
+    expect(r.summary).toMatchObject({ average: 15, serviceCount: 2, lowest: 10 });
+    expect(r.notEntered).toBe(1);
   });
   it("defaults to the last complete month and rejects bad or future months", async () => {
     const thisMonth = today().slice(0, 7);

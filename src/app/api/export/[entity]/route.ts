@@ -22,14 +22,17 @@ export const GET = adminRoute<{ entity: string }>(async ({ req, params }) => {
     const rows: Record<string, unknown>[] = r.services.map((s) => ({
       date: s.date,
       service: s.program_name,
-      people_present: s.present,
+      male: s.male ?? "",
+      female: s.female ?? "",
+      children: s.children ?? "",
+      people_present: s.present ?? "Not entered",
       from_service_before: s.change ?? "",
     }));
     rows.push({ date: "", service: "Average per service", people_present: r.summary.average, from_service_before: "" });
     rows.push({ date: "", service: `Average per service, ${r.previous.label}`, people_present: r.previous.serviceCount ? r.previous.average : "", from_service_before: "" });
     rows.push({ date: "", service: "Change in average", people_present: r.comparison?.net ?? "", from_service_before: "" });
-    rows.push({ date: "", service: "Different people this month", people_present: r.uniquePeople, from_service_before: "" });
-    const columns = ["date", "service", "people_present", "from_service_before"];
+    rows.push({ date: "", service: "Average per service, by group", male: r.breakdown.male, female: r.breakdown.female, children: r.breakdown.children, people_present: "", from_service_before: "" });
+    const columns = ["date", "service", "male", "female", "children", "people_present", "from_service_before"];
     const name = `monthly-attendance-${r.month}`;
     if (format === "xlsx") return new NextResponse(await toXlsx([{ name: r.month, rows, columns }]), { headers: xlsxHeaders(name) });
     return new NextResponse(toCsv(rows, columns), {
